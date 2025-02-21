@@ -7,6 +7,9 @@ import logging
 from bs4 import BeautifulSoup
 from transformers import pipeline
 import tkinter as tk
+from PIL import ImageGrab  # Para captura de tela
+import threading
+import time
 
 # Configuração do logging
 logging.basicConfig(level=logging.INFO)
@@ -15,8 +18,7 @@ class SecurityAI:
     def __init__(self):
         """
         Inicializa a instância da SecurityAI com dicionários de palavras-chave e sinais de phishing
-        para múltiplos idiomas, configura o pipeline de NLP multilíngue, recupera as credenciais do Telegram
-        e inicializa o cache de resultados.
+        para múltiplos idiomas, configura o pipeline de NLP multilíngue e inicializa o cache de resultados.
         """
         self.threat_keywords = {
             "en": ["password", "credit card", "ssn", "bank account", "login", "verify", "urgent"],
@@ -40,12 +42,9 @@ class SecurityAI:
         
         # Pipeline de NLP multilíngue
         self.nlp_pipeline = pipeline("text-classification", model="distilbert-base-multilingual-cased")
-        # Credenciais do Telegram via variáveis de ambiente
-        self.telegram_bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "<YOUR_BOT_TOKEN>")
-        self.telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "<YOUR_CHAT_ID>")
         # Inicializa um cache simples (dicionário) para armazenar resultados de processamento de texto
         self.cache = {}
-    
+
     def analyze_text(self, text: str, lang: str = "en") -> str:
         """
         Analisa o texto em busca de palavras-chave de ameaça e sinais de phishing no idioma especificado.
@@ -74,7 +73,7 @@ class SecurityAI:
         result = " | ".join(detected) if detected else "No threats detected."
         self.cache[cache_key] = result
         return result
-    
+
     def classify_text(self, text: str) -> str:
         """
         Classifica o texto utilizando o pipeline de NLP multilíngue.
@@ -97,7 +96,7 @@ class SecurityAI:
         except Exception as e:
             logging.error(f"Error classifying text: {e}")
             return "Error"
-    
+
     def detect_sensitive_data(self, text: str) -> str:
         """
         Utiliza expressões regulares para detectar dados sensíveis, como e-mails, números de cartão de crédito ou SSNs.
@@ -120,7 +119,7 @@ class SecurityAI:
         result = f"Sensitive data detected: {', '.join(detected)}" if detected else "No sensitive data detected."
         self.cache[cache_key] = result
         return result
-    
+
     def analyze_image(self, image_path: str) -> str:
         """
         Carrega e analisa uma imagem para detectar anomalias visuais.
@@ -134,7 +133,7 @@ class SecurityAI:
         if np.mean(edges) > 50:
             return "Potential visual anomaly detected."
         return "No visual threats detected."
-    
+
     def analyze_url(self, url: str) -> str:
         """
         Analisa uma URL realizando uma requisição HTTP e extraindo o texto da página.
@@ -161,22 +160,7 @@ class SecurityAI:
         except requests.RequestException as e:
             logging.error(f"Error analyzing URL: {e}")
             return "Error analyzing URL."
-    
-    def send_alert(self, message: str):
-        """
-        Envia um alerta via Telegram utilizando a API do bot.
-        """
-        telegram_api = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
-        payload = {"chat_id": self.telegram_chat_id, "text": message}
-        try:
-            response = requests.post(telegram_api, data=payload)
-            if response.status_code != 200:
-                logging.error(f"Failed to send alert: {response.status_code} - {response.text}")
-            else:
-                logging.info("Alert sent successfully.")
-        except Exception as e:
-            logging.error(f"Error sending alert: {e}")
-    
+
     def show_risk_popup(self, message: str):
         """
         Exibe um balão (popup) na tela com a mensagem de alerta e um botão 'Entendi'.
@@ -193,28 +177,72 @@ class SecurityAI:
         button.pack(pady=10)
         popup.grab_set()  # Garante que o popup seja modal
         root.mainloop()
-    
-# Exemplo de uso
+
+    def analyze_screen(self) -> str:
+        """
+        Captura a tela, converte para imagem e aplica detecção de bordas para identificar anomalias visuais.
+        Retorna uma mensagem informando se foi detectada uma anomalia.
+        """
+        try:
+            screenshot = ImageGrab.grab()
+            image_np = np.array(screenshot)
+            # Converte de RGB para BGR (formato usado pelo OpenCV)
+            image_cv = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+            gray = cv2.cvtColor(image_cv, cv2.COLOR_BGR2GRAY)
+            edges = cv2.Canny(gray, 100, 200)
+            if np.mean(edges) > 50:
+                return "Potential visual anomaly detected."
+            else:
+                return "No visual threats detected."
+        except Exception as e:
+            logging.error(f"Error in screen analysis: {e}")
+            return "Error analyzing screen."
+
+    def start_screen_analysis(self):
+        """
+        Inicia a análise de tela em tempo real, capturando a tela a cada 5 segundos.
+        Se uma anomalia for detectada, exibe um popup de alerta.
+        """
+        def run():
+            while True:
+                result = self.analyze_screen()
+                if "anomaly" in result.lower():
+                    self.show_risk_popup(result)
+                time.sleep(5)
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+
+
+# EXEMPLO DE USO COM INTERFACE GRÁFICA (Tkinter)
 if __name__ == '__main__':
     ai = SecurityAI()
-    
-    # Análise de texto em inglês
-    text_sample_en = "Please enter your password here."
-    result_en = ai.analyze_text(text_sample_en, lang="en")
-    logging.info(f"English Text analysis: {result_en}")
-    
-    # Análise de texto em espanhol
-    text_sample_es = "Por favor, ingrese su contraseña aquí."
-    result_es = ai.analyze_text(text_sample_es, lang="es")
-    logging.info(f"Spanish Text analysis: {result_es}")
-    
-    # Análise de texto em chinês
-    text_sample_zh = "请输入您的密码。"
-    result_zh = ai.analyze_text(text_sample_zh, lang="zh")
-    logging.info(f"Chinese Text analysis: {result_zh}")
-    
-    # Envio de alerta via Telegram
-    ai.send_alert("Security alert: Potential phishing detected!")
-    
-    # Exibe um popup de alerta na tela
-    ai.show_risk_popup("Security alert: Potential phishing detected!")
+
+    # Cria uma interface gráfica básica
+    root = tk.Tk()
+    root.title("Security AI Dashboard")
+
+    # Botão para análise de texto
+    def run_text_analysis():
+        sample_text = "Please enter your password here."
+        result = ai.analyze_text(sample_text, lang="en")
+        logging.info(f"Text Analysis Result: {result}")
+        ai.show_risk_popup(result)
+
+    text_button = tk.Button(root, text="Run Text Analysis", command=run_text_analysis)
+    text_button.pack(pady=10)
+
+    # Botão para análise de URL
+    def run_url_analysis():
+        sample_url = "http://example.com/phishing"
+        result = ai.analyze_url(sample_url)
+        logging.info(f"URL Analysis Result: {result}")
+        ai.show_risk_popup(result)
+
+    url_button = tk.Button(root, text="Run URL Analysis", command=run_url_analysis)
+    url_button.pack(pady=10)
+
+    # Botão para iniciar a análise de tela em tempo real
+    screen_button = tk.Button(root, text="Start Real-Time Screen Analysis", command=ai.start_screen_analysis)
+    screen_button.pack(pady=10)
+
+    root.mainloop()
